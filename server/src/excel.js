@@ -10,14 +10,18 @@ const columns = [
   { header: 'AN', key: 'an' },
   { header: 'ชื่อ-นามสกุล', key: 'patientName' },
   { header: 'หอผู้ป่วย', key: 'wardName' },
+];
+const matchedColumns = [
   { header: 'ผู้จัดยา', key: 'matchedBy' },
   { header: 'วันเวลาที่จัดยา', key: 'matchedAt' },
 ];
+const pendingColumns = [{ header: 'วันเวลาที่จ่ายยา', key: 'dispensedAt' }];
 
-export async function matchedRowsToXlsx(rows) {
+// pending=true exports the not-yet-scanned list (dispense time instead of who matched it).
+export async function matchedRowsToXlsx(rows, { pending = false } = {}) {
   const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet('บันทึกการจัดยา', { views: [{ state: 'frozen', ySplit: 1 }] });
-  ws.columns = columns;
+  const ws = wb.addWorksheet(pending ? 'ยังไม่ได้สแกน' : 'บันทึกการจัดยา', { views: [{ state: 'frozen', ySplit: 1 }] });
+  ws.columns = [...columns, ...(pending ? pendingColumns : matchedColumns)];
   rows.forEach((r) => ws.addRow({ ...r, orderTypeLabel: ORDER_TYPES[r.orderType] ?? '-' }));
 
   const border = { style: 'thin', color: { argb: 'FFBFBFBF' } };

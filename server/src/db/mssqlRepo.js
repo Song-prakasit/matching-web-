@@ -28,6 +28,17 @@ export async function loginWithPassword(username, password) {
   return r.recordset[0] ?? null;
 }
 
+export async function changePassword(userId, currentPassword, newPassword) {
+  const r = await (await pool())
+    .request()
+    .input('id', sql.NVarChar, userId)
+    .input('current', sql.Binary, passwordToken(currentPassword))
+    .input('next', sql.Binary, passwordToken(newPassword)).query(`
+      UPDATE [HAD].[dbo].[ms_users] SET vc_Password = @next
+      WHERE vc_UserId = @id AND vc_Password = @current AND ISNULL(DeleteYN, 'N') = 'N'`);
+  return r.rowsAffected[0] === 1;
+}
+
 export async function loginWithQr(code) {
   const r = await (await pool()).request().input('code', sql.NVarChar, code).query(`
     SELECT us.vc_UserId AS userId, us.vc_Name AS name
@@ -71,13 +82,43 @@ export async function markMatched(rxNumber, userId) {
   return r.rowsAffected[0] > 0;
 }
 
-export async function searchMatched({ date, ward, orderType, hn, an, rx }) {
+// Puts a prescription back to "not matched" (NULL, the state the old program started from).
+export async function unmatch(rxNumber) {
+  const r = await (await pool()).request().input('rx', sql.VarChar, rxNumber).query(`
+    UPDATE IPharmaIRxStatus
+    SET MatchingStatus = NULL, MatchingEmpID = NULL, MatchingDatetime = NULL
+    WHERE RxNumber = @rx AND ISNULL(MatchingStatus, '0') <> '0'`);
+  return r.rowsAffected[0] > 0;
+}
+
+export async function listUsers() {
+  const r = await (await pool()).request().query(`
+    SELECT vc_UserId AS userId, vc_Username AS username, vc_Name AS name
+    FROM [HAD].[dbo].[ms_users]
+    WHERE ISNULL(DeleteYN, 'N') = 'N'
+    ORDER BY vc_Name`);
+  return r.recordset;
+}
+
+export async function resetPassword(userId, newPassword) {
+  const r = await (await pool())
+    .request()
+    .input('id', sql.NVarChar, userId)
+    .input('next', sql.Binary, passwordToken(newPassword)).query(`
+      UPDATE [HAD].[dbo].[ms_users] SET vc_Password = @next
+      WHERE vc_UserId = @id AND ISNULL(DeleteYN, 'N') = 'N'`);
+  return r.rowsAffected[0] === 1;
+}
+
+// matched=true: already scanned. matched=false: dispensed but not scanned yet (MatchingStatus NULL or 0,
+// the same "not matched" rule markMatched uses).
+async function searchOrders({ date, ward, orderType, hn, an, rx }, matched) {
   const req = (await pool()).request().input('date', sql.Date, date);
   const where = [
     'os.DispenseDatetime >= @date',
     'os.DispenseDatetime < DATEADD(day, 1, @date)',
     "ISNULL(os.DispenseStatus, '0') = '1'",
-    "ISNULL(os.MatchingStatus, '0') = '1'",
+    matched ? "ISNULL(os.MatchingStatus, '0') = '1'" : "ISNULL(os.MatchingStatus, '0') <> '1'",
   ];
   if (hn) { req.input('hn', sql.VarChar, hn); where.push('p.PatientID = @hn'); }
   if (an) { req.input('an', sql.VarChar, an); where.push('o.AdmitNumber = @an'); }
@@ -95,7 +136,8 @@ export async function searchMatched({ date, ward, orderType, hn, an, rx }) {
            p.PatientFullName AS patientName,
            w.FacilityLocalName AS wardName,
            emp.vc_Name AS matchedBy,
-           ${fmt('os.MatchingDatetime')} AS matchedAt
+           ${fmt('os.MatchingDatetime')} AS matchedAt,
+           ${fmt('os.DispenseDatetime')} AS dispensedAt
     FROM IPharmaIRx o
     INNER JOIN IPharmaIRxStatus os ON o.RxNumber = os.RxNumber
     LEFT JOIN IPharmaInPatientInfo pt ON o.AdmitNumber = pt.AdmitNumber
@@ -103,9 +145,12 @@ export async function searchMatched({ date, ward, orderType, hn, an, rx }) {
     LEFT JOIN IPharmaFacility w ON pt.FacilityCode = w.FacilityCode
     LEFT JOIN [HAD].[dbo].[ms_users] emp ON os.MatchingEmpID = emp.vc_UserId
     WHERE ${where.join(' AND ')}
-    ORDER BY os.MatchingDatetime DESC`);
+    ORDER BY ${matched ? 'os.MatchingDatetime DESC' : 'os.DispenseDatetime ASC'}`);
   return r.recordset;
 }
+
+export const searchMatched = (filters) => searchOrders(filters, true);
+export const searchPending = (filters) => searchOrders(filters, false);
 
 export async function getOrderItems(rxNumber) {
   const r = await (await pool()).request().input('rx', sql.VarChar, rxNumber).query(`

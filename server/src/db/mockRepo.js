@@ -21,8 +21,10 @@ const minutesAgo = (daysAgo, minutes) => {
 };
 
 const users = [
-  { userId: 'U001', username: 'demo', password: '1234', qr: 'DEMO-QR-001', name: 'ภญ.ทดสอบ ระบบจัดยา' },
-  { userId: 'U002', username: 'pharm2', password: '1234', qr: 'DEMO-QR-002', name: 'ภก.สมชาย ใจดี' },
+  { userId: 'U001', username: 'demo', password: 'Demo@Matching12', qr: 'DEMO-QR-001', name: 'ภญ.ทดสอบ ระบบจัดยา' },
+  // Pre-policy password, to try the forced password change.
+  { userId: 'U003', username: 'legacy', password: '1234', qr: 'DEMO-QR-003', name: 'ผู้ใช้รหัสผ่านเดิม' },
+  { userId: 'U002', username: 'pharm2', password: 'Demo@Matching12', qr: 'DEMO-QR-002', name: 'ภก.สมชาย ใจดี' },
 ];
 const userTokens = new Map();
 
@@ -96,13 +98,20 @@ const orders = seed.map(([rxNumber, pi, orderType, daysAgo, matched], i) => {
 });
 
 const publicUser = (u) => ({ userId: u.userId, name: u.name });
+const tokenOf = (u) => userTokens.get(u.userId) ?? passwordToken(u.password);
 
 export async function loginWithPassword(username, password) {
   const u = users.find((x) => x.username === username);
   if (!u) return null;
-  if (!userTokens.has(u.userId)) userTokens.set(u.userId, passwordToken(u.password));
   // Exercises the same legacy encryption the real database comparison uses.
-  return passwordToken(password).equals(userTokens.get(u.userId)) ? publicUser(u) : null;
+  return passwordToken(password).equals(tokenOf(u)) ? publicUser(u) : null;
+}
+
+export async function changePassword(userId, currentPassword, newPassword) {
+  const u = users.find((x) => x.userId === userId);
+  if (!u || !passwordToken(currentPassword).equals(tokenOf(u))) return false;
+  userTokens.set(u.userId, passwordToken(newPassword));
+  return true;
 }
 
 export async function loginWithQr(code) {
@@ -127,11 +136,29 @@ export async function markMatched(rxNumber, userId) {
   return true;
 }
 
-export async function searchMatched({ date, ward, orderType, hn, an, rx }) {
+export async function unmatch(rxNumber) {
+  const o = orders.find((x) => x.rxNumber === rxNumber && x.matchingStatus);
+  if (!o) return false;
+  Object.assign(o, { matchingStatus: null, matchedBy: null, matchedAt: null });
+  return true;
+}
+
+export async function listUsers() {
+  return users.map(({ userId, username, name }) => ({ userId, username, name }));
+}
+
+export async function resetPassword(userId, newPassword) {
+  const u = users.find((x) => x.userId === userId);
+  if (!u) return false;
+  userTokens.set(u.userId, passwordToken(newPassword));
+  return true;
+}
+
+function searchOrders({ date, ward, orderType, hn, an, rx }, matched) {
   return orders
     .filter(
       (o) =>
-        o.matchingStatus &&
+        !!o.matchingStatus === matched &&
         isoDate(o.dispensedAt) === date &&
         (!ward || o.ward === ward) &&
         (!orderType || o.orderType === orderType) &&
@@ -139,7 +166,7 @@ export async function searchMatched({ date, ward, orderType, hn, an, rx }) {
         (!an || o.an === an) &&
         (!rx || o.rxNumber === rx),
     )
-    .sort((a, b) => b.matchedAt - a.matchedAt)
+    .sort((a, b) => (matched ? b.matchedAt - a.matchedAt : a.dispensedAt - b.dispensedAt))
     .map((o) => ({
       createdAt: display(o.createdAt),
       rxNumber: o.rxNumber,
@@ -150,9 +177,13 @@ export async function searchMatched({ date, ward, orderType, hn, an, rx }) {
       patientName: o.patientName,
       wardName: wards.find((w) => w.code === o.ward)?.name ?? null,
       matchedBy: users.find((u) => u.userId === o.matchedBy)?.name ?? null,
-      matchedAt: display(o.matchedAt),
+      matchedAt: o.matchedAt ? display(o.matchedAt) : null,
+      dispensedAt: display(o.dispensedAt),
     }));
 }
+
+export const searchMatched = async (filters) => searchOrders(filters, true);
+export const searchPending = async (filters) => searchOrders(filters, false);
 
 export async function getOrderItems(rxNumber) {
   return orders.find((o) => o.rxNumber === rxNumber)?.items ?? [];

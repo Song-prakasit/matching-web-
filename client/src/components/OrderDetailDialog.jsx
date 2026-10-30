@@ -15,9 +15,27 @@ function LocationBadge({ location }) {
   );
 }
 
-export default function OrderDetailDialog({ order, typeName, onClose }) {
+export default function OrderDetailDialog({ order, typeName, isAdmin, onCancelled, onClose }) {
   const [items, setItems] = useState(null);
   const [error, setError] = useState('');
+  const [cancelling, setCancelling] = useState(false);
+  const [reason, setReason] = useState('');
+  const [cancelError, setCancelError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function cancelMatch(e) {
+    e.preventDefault();
+    setBusy(true);
+    setCancelError('');
+    try {
+      await api(`/matched/${encodeURIComponent(order.rxNumber)}/cancel`, { method: 'POST', body: { reason } });
+      onCancelled();
+    } catch (err) {
+      setCancelError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   useEffect(() => {
     api(`/orders/${encodeURIComponent(order.rxNumber)}/items`)
@@ -96,6 +114,36 @@ export default function OrderDetailDialog({ order, typeName, onClose }) {
             </ul>
           )}
         </div>
+
+        {isAdmin && (
+          <div className="border-t border-slate-100 px-5 py-3">
+            {cancelling ? (
+              <form onSubmit={cancelMatch} className="space-y-2">
+                <input
+                  autoFocus
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  maxLength={200}
+                  placeholder="เหตุผลที่ยกเลิก เช่น สแกนผิดใบ"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-rose-500 focus:ring-4 focus:ring-rose-500/15"
+                />
+                {cancelError && <p className="text-sm text-rose-700">{cancelError}</p>}
+                <div className="flex justify-end gap-2">
+                  <button type="button" onClick={() => setCancelling(false)} className="rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100">
+                    ไม่ยกเลิก
+                  </button>
+                  <button type="submit" disabled={busy} className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-60">
+                    {busy ? 'กำลังบันทึก…' : 'ยืนยันยกเลิกการสแกน'}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <button type="button" onClick={() => setCancelling(true)} className="text-sm font-medium text-rose-600 hover:underline">
+                ยกเลิกการสแกนจัดยาใบนี้
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

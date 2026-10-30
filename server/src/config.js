@@ -20,6 +20,8 @@ export const config = {
   port: Number(env.PORT || 3000),
   dbMode,
   jwtSecret: env.JWT_SECRET || crypto.randomBytes(32).toString('hex'),
+  // Comma-separated vc_UserId values allowed to open the settings page. Mock mode defaults to the demo user.
+  adminUserIds: (env.ADMIN_USER_IDS ?? (dbMode === 'mock' ? 'U001' : '')).split(',').map((v) => v.trim()).filter(Boolean),
   sessionHours: Number(env.SESSION_HOURS || 12),
   // How many days back a dispensed prescription can still be scanned (old program: 1 = yesterday + today).
   scanLookbackDays: Number(env.SCAN_LOOKBACK_DAYS ?? 1),

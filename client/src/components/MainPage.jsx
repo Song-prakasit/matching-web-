@@ -1,6 +1,11 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { api, download } from '../api.js';
+import { playScanSound } from '../feedback.js';
+import FontSizeControl from './FontSizeControl.jsx';
+import Logo from './Logo.jsx';
 import OrderDetailDialog from './OrderDetailDialog.jsx';
+import SettingsDialog from './SettingsDialog.jsx';
+import SummaryCard from './SummaryCard.jsx';
 import {
   AlertIcon,
   CameraIcon,
@@ -9,12 +14,14 @@ import {
   DownloadIcon,
   FilterIcon,
   LogoutIcon,
-  PillIcon,
   ScanIcon,
   SearchIcon,
+  SettingsIcon,
 } from './Icons.jsx';
 
 const CameraScanner = lazy(() => import('./CameraScanner.jsx'));
+
+const REFRESH_PENDING_MS = 60000;
 
 const today = () => {
   const d = new Date();
@@ -34,7 +41,8 @@ const scanStyles = {
   error: { box: 'bg-red-50 text-red-700 ring-red-200', icon: AlertIcon },
 };
 
-export default function MainPage({ user, dbMode, onLogout }) {
+export default function MainPage({ user, dbMode, branding, onBrandingSaved, startWithSettings, onChangePassword, onLogout }) {
+  const [settingsOpen, setSettingsOpen] = useState(!!startWithSettings);
   const [meta, setMeta] = useState({ wards: [], orderTypes: [] });
   const [filters, setFilters] = useState(emptyFilters);
   const [rows, setRows] = useState([]);
@@ -48,6 +56,8 @@ export default function MainPage({ user, dbMode, onLogout }) {
   const [camera, setCamera] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [view, setView] = useState('matched'); // 'matched' | 'pending'
+  const [summaryKey, setSummaryKey] = useState(0);
   const scanInput = useRef(null);
 
   const focusScan = () => finePointer() && scanInput.current?.focus();
@@ -56,15 +66,16 @@ export default function MainPage({ user, dbMode, onLogout }) {
     setLoading(true);
     setListError('');
     try {
-      const { rows } = await api(`/matched?${new URLSearchParams(f)}`);
+      const { rows } = await api(`/${view}?${new URLSearchParams(f)}`);
       setRows(rows);
+      setSummaryKey((k) => k + 1);
     } catch (e) {
       setListError(e.message);
       setRows([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [view]);
 
   useEffect(() => {
     api('/meta').then(setMeta).catch((e) => setListError(e.message));
@@ -74,7 +85,7 @@ export default function MainPage({ user, dbMode, onLogout }) {
   // Date / ward / type re-run the search immediately; text fields run it on Enter or when cleared.
   useEffect(() => {
     search(filters);
-  }, [filters.date, filters.ward, filters.orderType]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filters.date, filters.ward, filters.orderType, view]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setFilter = (key) => (e) => {
     const value = e.target.value;
@@ -93,19 +104,31 @@ export default function MainPage({ user, dbMode, onLogout }) {
       if (res.status === 'matched') {
         setScanCode('');
         navigator.vibrate?.(60);
+        playScanSound(true);
         await search(filters);
       } else {
         navigator.vibrate?.([80, 60, 80]);
+        playScanSound(false);
         scanInput.current?.select();
       }
       setHighlight({ rx: res.rxNumber, at: Date.now() });
     } catch (e) {
       setScanResult({ status: 'error', message: e.message, at: Date.now() });
+      playScanSound(false);
       scanInput.current?.select();
     } finally {
       setScanning(false);
     }
   }
+
+  // New prescriptions keep arriving, so the waiting list refreshes itself while the tab is in view.
+  useEffect(() => {
+    if (view !== 'pending') return undefined;
+    const id = setInterval(() => {
+      if (!document.hidden) search(filters);
+    }, REFRESH_PENDING_MS);
+    return () => clearInterval(id);
+  }, [view, filters, search]);
 
   useEffect(() => {
     if (!highlight) return;
@@ -115,7 +138,7 @@ export default function MainPage({ user, dbMode, onLogout }) {
   async function exportExcel() {
     setExporting(true);
     try {
-      await download(`/matched/export?${new URLSearchParams(filters)}`);
+      await download(`/${view}/export?${new URLSearchParams(filters)}`);
     } catch (e) {
       setListError(e.message);
     } finally {
@@ -129,11 +152,9 @@ export default function MainPage({ user, dbMode, onLogout }) {
   return (
     <div className="min-h-dvh pb-10">
       <header className="sticky top-0 z-30 bg-teal-800 text-white shadow-lg shadow-teal-950/20">
-        <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3">
-          <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-white/15">
-            <PillIcon />
-          </div>
-          <div className="min-w-0 flex-1">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+          <Logo src={branding.logo} className="size-9 rounded-xl bg-white/15 p-0.5" iconClass="size-5" />
+          <div className="min-w-40 flex-1">
             <h1 className="truncate font-semibold leading-tight">ระบบบันทึกจัดยา</h1>
             <p className="truncate text-xs text-teal-100/80">{user.name}</p>
           </div>
@@ -142,6 +163,23 @@ export default function MainPage({ user, dbMode, onLogout }) {
               โหมดทดสอบ
             </span>
           )}
+          <FontSizeControl className="text-teal-50" buttonClass="hover:bg-white/10" />
+          {user.isAdmin && (
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-teal-50 transition hover:bg-white/10"
+              aria-label="ตั้งค่า"
+            >
+              <SettingsIcon className="size-4" />
+              <span className="hidden sm:inline">ตั้งค่า</span>
+            </button>
+          )}
+          <button
+            onClick={onChangePassword}
+            className="rounded-lg px-3 py-2 text-sm text-teal-50 transition hover:bg-white/10"
+          >
+            เปลี่ยนรหัสผ่าน
+          </button>
           <button
             onClick={onLogout}
             className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-teal-50 transition hover:bg-white/10"
@@ -274,10 +312,28 @@ export default function MainPage({ user, dbMode, onLogout }) {
           </form>
         </section>
 
+        <SummaryCard date={filters.date} refreshKey={summaryKey} onShowPending={() => setView('pending')} />
+
         {/* Results */}
         <section className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200">
           <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-3">
-            <h2 className="font-semibold text-slate-700">รายการที่จัดยาแล้ว</h2>
+            <div className="flex rounded-xl bg-slate-100 p-1 text-sm font-medium" role="tablist">
+              {[
+                ['matched', 'จัดยาแล้ว'],
+                ['pending', 'ยังไม่ได้สแกน'],
+              ].map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={view === key}
+                  onClick={() => setView(key)}
+                  className={`rounded-lg px-3 py-1.5 transition ${view === key ? 'bg-white text-slate-800 shadow' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <span className="rounded-full bg-teal-50 px-2.5 py-0.5 text-sm font-medium text-teal-700">
               {loading ? '…' : `${rows.length} รายการ`}
             </span>
@@ -294,7 +350,7 @@ export default function MainPage({ user, dbMode, onLogout }) {
           {listError && <p className="bg-red-50 px-4 py-3 text-sm text-red-700">{listError}</p>}
 
           {!loading && !listError && rows.length === 0 && (
-            <p className="px-4 py-14 text-center text-slate-400">ไม่พบข้อมูล</p>
+            <p className="px-4 py-14 text-center text-slate-400">{view === 'pending' ? 'ไม่มีรายการค้างสแกน' : 'ไม่พบข้อมูล'}</p>
           )}
 
           {rows.length > 0 && (
@@ -304,7 +360,7 @@ export default function MainPage({ user, dbMode, onLogout }) {
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                     <tr>
-                      {['เลขที่ใบสั่ง', 'HN / AN', 'ชื่อ-นามสกุล', 'หอผู้ป่วย', 'ประเภท', 'วันเวลาที่สั่ง', 'ผู้จัดยา', 'เวลาจัดยา'].map(
+                      {['เลขที่ใบสั่ง', 'HN / AN', 'ชื่อ-นามสกุล', 'หอผู้ป่วย', 'ประเภท', 'วันเวลาที่สั่ง', ...(view === 'pending' ? ['เวลาจ่ายยา'] : ['ผู้จัดยา', 'เวลาจัดยา'])].map(
                         (h) => (
                           <th key={h} className="whitespace-nowrap px-4 py-2.5">
                             {h}
@@ -330,8 +386,14 @@ export default function MainPage({ user, dbMode, onLogout }) {
                         <td className="px-4 py-3">{r.wardName}</td>
                         <td className="whitespace-nowrap px-4 py-3">{typeName(r.orderType)}</td>
                         <td className="whitespace-nowrap px-4 py-3 text-slate-500">{r.orderedAt}</td>
-                        <td className="px-4 py-3">{r.matchedBy}</td>
-                        <td className="whitespace-nowrap px-4 py-3 text-slate-500">{r.matchedAt}</td>
+                        {view === 'pending' ? (
+                          <td className="whitespace-nowrap px-4 py-3 text-slate-500">{r.dispensedAt}</td>
+                        ) : (
+                          <>
+                            <td className="px-4 py-3">{r.matchedBy}</td>
+                            <td className="whitespace-nowrap px-4 py-3 text-slate-500">{r.matchedAt}</td>
+                          </>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -349,14 +411,14 @@ export default function MainPage({ user, dbMode, onLogout }) {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-baseline justify-between gap-2">
                           <span className="font-semibold text-teal-800">{r.rxNumber}</span>
-                          <span className="shrink-0 text-xs text-slate-400">{r.matchedAt}</span>
+                          <span className="shrink-0 text-xs text-slate-400">{view === 'pending' ? r.dispensedAt : r.matchedAt}</span>
                         </div>
                         <p className="truncate">{r.patientName}</p>
                         <p className="truncate text-xs text-slate-500">
                           HN {r.hn} · AN {r.an} · {r.wardName}
                         </p>
                         <p className="truncate text-xs text-slate-400">
-                          {typeName(r.orderType)} · {r.matchedBy}
+                          {typeName(r.orderType)}{view === 'matched' && ` · ${r.matchedBy}`}
                         </p>
                       </div>
                       <ChevronIcon className="size-4 shrink-0 text-slate-300" />
@@ -369,10 +431,28 @@ export default function MainPage({ user, dbMode, onLogout }) {
         </section>
       </main>
 
+      {settingsOpen && user.isAdmin && (
+        <SettingsDialog
+          branding={branding}
+          onSaved={onBrandingSaved}
+          onClose={() => {
+            setSettingsOpen(false);
+            focusScan();
+          }}
+        />
+      )}
+
       {detail && (
         <OrderDetailDialog
           order={detail}
           typeName={typeName(detail.orderType)}
+          isAdmin={user.isAdmin && view === 'matched'}
+          onCancelled={() => {
+            setDetail(null);
+            setScanResult(null);
+            search(filters);
+            focusScan();
+          }}
           onClose={() => {
             setDetail(null);
             focusScan();

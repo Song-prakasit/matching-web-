@@ -21,3 +21,21 @@ body {
 .row-flash {
   animation: flash 2.5s ease-out;
 }
+
+/* High-contrast mode: remap the light greys and pale tints that are hard to read to much darker ones. */
+.hc {
+  --color-slate-300: var(--color-slate-600);
+  --color-slate-400: var(--color-slate-700);
+  --color-slate-500: var(--color-slate-900);
+  --color-slate-600: var(--color-slate-950);
+  --color-slate-700: var(--color-slate-950);
+  --color-teal-100: #ffffff;
+  --color-teal-50: #ffffff;
+  --color-teal-700: var(--color-teal-900);
+  --color-teal-800: var(--color-teal-950);
+}
+.hc input:focus-visible,
+.hc button:focus-visible {
+  outline: 3px solid var(--color-slate-950);
+  outline-offset: 2px;
+}
